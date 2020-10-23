@@ -1,0 +1,126 @@
+﻿#pragma kernel S8VectorFieldViewer
+
+#include "Assets/_NvidiaTest/S8/SDL_NoiseSet.cginc"
+#include "Assets/_NvidiaTest/S8/Quaternion.cginc"
+
+struct Particle
+{
+	float3 initPosition;
+	float3 position;
+	float3 velocity;
+	float3 direction;
+	float life;
+    float duration;
+};
+
+#ifndef PI
+#define PI 3.141592653589793
+#endif
+
+RWStructuredBuffer<Particle> particleBuffer;
+
+float time;
+float deltaTime;
+float3 params1;
+float3 params2;
+float3 params3;
+float duration;
+
+float3 position;
+float3 gravityPosition;
+float4 targetRotation;
+
+
+//=====================================================================================
+// commmon
+//=====================================================================================
+
+float map(float2 value, float min1, float max1, float min2, float max2){
+    float2 perc = (value - min1) / (max1 - min1);
+    return perc * (max2 - min2) + min2;
+}
+
+float exponentialInOut(float t) {
+  return t == 0.0 || t == 1.0
+    ? t
+    : t < 0.5
+      ? +0.5 * pow(2.0, (20.0 * t) - 10.0)
+      : -0.5 * pow(2.0, 10.0 - (t * 20.0)) + 1.0;
+}
+
+float exponentialOut(float t) {
+  return t == 1.0 ? t : 1.0 - pow(2.0, -10.0 * t);
+}
+
+float sineInOut(float t) {
+  return -0.5 * (cos(PI * t) - 1.0);
+}
+
+float3 vectorField3(float lifePer, int id, float3 p){
+
+    float3 v = 0.0;
+    v.x = sin(p.z+3.14);
+    v.z = cos(p.x-3.14/2.);
+
+    float3 gp = gravityPosition;
+    float3 circle = 0.0;
+   
+    circle.x += sin(id + time * 5.0)*(0.08+params1.y*(lifePer));
+    circle.y += 0.12 + lifePer * params1.x;
+    circle.z += cos(id + time * 5.0)*(0.08+params1.y*(lifePer));
+
+    circle = quat_rot(targetRotation,circle);
+
+    gp += circle;
+    float3 grav = normalize(gp-p);
+
+    return lerp(v*params3.y, grav*params3.z,1.0 - lifePer*0.2);
+}
+
+
+
+//=====================================================================================
+// SDC_S8VectorFieldViewer particle
+//=====================================================================================
+
+[numthreads(256,1,1)]
+void S8VectorFieldViewer (uint3 id : SV_DispatchThreadID)
+{
+    // 1 to 0
+    float lifePer = (particleBuffer[id.x].life / particleBuffer[id.x].duration);
+    float lifePerEased = sineInOut(lifePer);
+
+    float mass = 1.0 + particleBuffer[id.x].velocity.x * particleBuffer[id.x].velocity.x * 5.0;//1.0+random(id.yx*0.9313)*3.8;
+    
+    particleBuffer[id.x].position.y = params3.y*0.01;
+    particleBuffer[id.x].initPosition.y = params3.y*0.01;
+
+    float3 acceleration = vectorField3(
+        lifePer,
+        id.x,
+        particleBuffer[id.x].position
+    );
+        
+    // acceleration = float3(0,0,0);
+	// subtract the life based on deltaTime
+	particleBuffer[id.x].life -= deltaTime;
+    if( particleBuffer[id.x].life < 0. ){
+        particleBuffer[id.x].position = particleBuffer[id.x].initPosition;
+        particleBuffer[id.x].duration = duration+((1.0+duration)*random(id.x));
+        particleBuffer[id.x].life = particleBuffer[id.x].duration;
+    }
+    
+    float3 currentPosition = particleBuffer[id.x].position;
+    float3 nextPosition = currentPosition;
+
+    // float radius = 0.3;
+    // nextPosition.x = sin( time + id.x ) * radius;
+    // // nextPosition.y = simplexNoise( time * 0.1 + id ) * params1.x; 
+    // nextPosition.y += simplexNoise( time * 0.1 + id ) * params1.x;
+    // nextPosition.z = cos( time + id.x ) * radius;
+
+    // nextPosition += curlNoise(currentPosition*params1.y+id.x) * params1.x;
+    
+    particleBuffer[id.x].direction = normalize(acceleration);
+	particleBuffer[id.x].position = nextPosition;
+}
